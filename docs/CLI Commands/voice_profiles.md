@@ -102,3 +102,83 @@ audio = model.generate_audio(state, "Hello from my cloned voice.")
 
 `voice_profiles.list_profiles()` and `voice_profiles.delete_profile(name)` are also
 available for managing saved profiles programmatically.
+
+## Step 6: Programmable rules (per-profile vocabulary/pronunciation overrides)
+
+Every profile can carry its own list of text-substitution rules, applied automatically
+to the text *before* generation whenever that profile is used via `/tts`. This is how
+you give a profile domain vocabulary — e.g. a "chemist" profile that always expands
+`NaCl` to `sodium chloride` — without affecting any other profile.
+
+Rules live inside that profile's own metadata file (`~/.cache/pocket_tts/profiles/<name>.json`)
+— there's no shared or global rule table, so a rule added to one profile has zero effect
+on any other.
+
+### Add a rule
+
+```bash
+uv run pocket-tts add-rule chemist "NaCl" "sodium chloride"
+```
+
+By default this is a whole-word, case-insensitive literal match (won't accidentally
+match inside a longer word). For pattern-based matching, add `--regex`:
+
+```bash
+uv run pocket-tts add-rule chemist "(\d+)mg" "\1 milligrams" --regex
+```
+
+`add-rule` is additive — call it again for each new term you want covered; earlier
+rules aren't touched.
+
+### List rules for a profile
+
+```bash
+uv run pocket-tts list-rules chemist
+```
+
+```
+[0] 'NaCl' -> 'sodium chloride'  (regex=False)
+[1] '(\\d+)mg' -> '\\1 milligrams'  (regex=True)
+```
+
+### Remove a rule
+
+```bash
+uv run pocket-tts remove-rule chemist 0
+```
+
+Removes by index (shown in `list-rules`). There's no bulk-add/import command yet —
+each rule is added one at a time via `add-rule`.
+
+### How matching works
+
+Rules are applied in the order they were added, each one scanning the *entire* text
+being generated (not a word-by-word dictionary lookup) — so rule 2 sees whatever rule 1
+already produced. Fine for the handful-to-dozens-of-rules scale this is meant for.
+
+### From Python
+
+```python
+from pocket_tts import voice_profiles
+
+voice_profiles.add_rule("chemist", "NaCl", "sodium chloride")
+voice_profiles.list_rules("chemist")
+voice_profiles.remove_rule("chemist", 0)
+
+# apply_rules() is what /tts calls internally before generation
+text = voice_profiles.apply_rules("chemist", "The formula is NaCl.")
+# -> "The formula is sodium chloride."
+```
+
+### Note: server-only for now
+
+Rule application is currently wired into the server's `voice_profile=` resolution path
+only. The CLI's `generate --voice <path>` doesn't do profile-name lookup (see Step 3
+above — it takes a raw `.safetensors` path), so it doesn't apply rules either.
+
+### Profile IDs
+
+Every profile also gets a stable `id` (UUID) at creation time, visible in its metadata
+JSON. Profiles are still looked up by `name` everywhere today — the `id` field is there
+for forward compatibility (e.g. a future tool that needs a stable reference even if a
+profile gets renamed later), not yet a usable lookup key on its own.
