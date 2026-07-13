@@ -55,4 +55,14 @@ pocket-tts serve --config "C://pocket-tts/my_config.yaml"
 
 Once the server is running, navigate to `http://localhost:8000` to access the web interface.
 
+## Concurrency
+
+`TTSModel` is not thread-safe (see the [Python API docs](python-api.md)), and the
+server holds a single shared model instance across all requests. Concurrent `/tts`
+requests are safely serialized behind an internal lock rather than running in
+parallel — if two requests arrive at the same time, the second one's generation
+simply waits for the first to finish before starting, rather than corrupting output.
+Other endpoints (`/health`, `/profiles`, `/history`) are unaffected and stay
+responsive even while a generation is in progress.
+
 For more advanced usage, see the [Python API documentation](python-api.md) for direct integration with the TTS model.
