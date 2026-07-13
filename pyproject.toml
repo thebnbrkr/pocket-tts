@@ -26,7 +26,15 @@ dependencies = [
 [project.optional-dependencies]
 audio = ["soundfile>=0.12.0"]
 quantize = ["torchao>=0.16.0"]
-asr = ["faster-whisper>=1.0.0"]
+asr = [
+    "faster-whisper>=1.0.0",
+    # Pinned exactly: onnxruntime>=1.24 dropped Python 3.10 wheels, and
+    # 1.20-1.23 dropped macOS 12 wheels -- 1.19.2 is the last version with both.
+    "onnxruntime==1.19.2",
+    # av>=17 has no prebuilt wheel for this platform and fails to build from
+    # source without FFmpeg dev libraries installed; 12.3.0 has one.
+    "av==12.3.0",
+]
 
 
 [dependency-groups]
