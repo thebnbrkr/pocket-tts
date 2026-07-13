@@ -1,5 +1,6 @@
 import json
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,15 +49,63 @@ def save_profile(
 
     export_model_state(model_state, safetensors_path)
     metadata = {
+        "id": str(uuid.uuid4()),
         "name": name,
         "source": source,
         "language": language,
         "tags": tags or [],
         "notes": notes,
+        "rules": [],
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     metadata_path.write_text(json.dumps(metadata, indent=2))
     return safetensors_path
+
+
+def _load_metadata(name: str) -> dict:
+    _validate_name(name)
+    metadata_path = _profiles_dir() / f"{name}.json"
+    if not metadata_path.exists():
+        raise ProfileNotFoundError(f"Unknown voice profile: {name}")
+    return json.loads(metadata_path.read_text())
+
+
+def _save_metadata(name: str, metadata: dict) -> None:
+    metadata_path = _profiles_dir() / f"{name}.json"
+    metadata_path.write_text(json.dumps(metadata, indent=2))
+
+
+def add_rule(name: str, pattern: str, replacement: str, regex: bool = False) -> None:
+    metadata = _load_metadata(name)
+    metadata.setdefault("rules", []).append(
+        {"pattern": pattern, "replacement": replacement, "regex": regex}
+    )
+    _save_metadata(name, metadata)
+
+
+def remove_rule(name: str, index: int) -> None:
+    metadata = _load_metadata(name)
+    rules = metadata.setdefault("rules", [])
+    rules.pop(index)
+    _save_metadata(name, metadata)
+
+
+def list_rules(name: str) -> list[dict]:
+    return _load_metadata(name).get("rules", [])
+
+
+def apply_rules(name: str, text: str) -> str:
+    for rule in list_rules(name):
+        if rule["regex"]:
+            text = re.sub(rule["pattern"], rule["replacement"], text)
+        else:
+            text = re.sub(
+                rf"\b{re.escape(rule['pattern'])}\b",
+                rule["replacement"],
+                text,
+                flags=re.IGNORECASE,
+            )
+    return text
 
 
 def get_profile_path(name: str) -> Path:

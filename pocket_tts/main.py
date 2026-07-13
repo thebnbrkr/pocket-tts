@@ -178,6 +178,7 @@ def text_to_speech(
             profile_path = voice_profiles.get_profile_path(voice_profile)
         except voice_profiles.ProfileNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
+        text = voice_profiles.apply_rules(voice_profile, text)
         model_state = tts_model._cached_get_state_for_audio_prompt(str(profile_path))
         logging.warning("Using voice profile: %s", voice_profile)
     elif voice_url is not None:
@@ -479,6 +480,48 @@ def list_profiles_command():
         typer.echo(
             f"{p['name']:20s} lang={p.get('language') or '-':10s} tags={','.join(p['tags'])}"
         )
+
+
+# ----------------------------------------------
+# voice profile rules CLI implementation
+# ----------------------------------------------
+
+
+@cli_app.command("add-rule")
+def add_rule(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+    pattern: Annotated[str, typer.Argument(help="Text to match")],
+    replacement: Annotated[str, typer.Argument(help="Text to substitute in")],
+    regex: Annotated[
+        bool, typer.Option(help="Treat pattern as a regex instead of a literal word")
+    ] = False,
+):
+    """Add a text-substitution rule to a saved voice profile."""
+    voice_profiles.add_rule(profile, pattern, replacement, regex=regex)
+    typer.echo(f"Added rule to '{profile}': {pattern!r} -> {replacement!r}")
+
+
+@cli_app.command("list-rules")
+def list_rules_command(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+):
+    """List text-substitution rules for a voice profile."""
+    rules = voice_profiles.list_rules(profile)
+    if not rules:
+        typer.echo(f"No rules for '{profile}' yet. Add one with `pocket-tts add-rule`.")
+        return
+    for i, r in enumerate(rules):
+        typer.echo(f"[{i}] {r['pattern']!r} -> {r['replacement']!r}  (regex={r['regex']})")
+
+
+@cli_app.command("remove-rule")
+def remove_rule_command(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+    index: Annotated[int, typer.Argument(help="Rule index, see list-rules")],
+):
+    """Remove a rule from a voice profile by its index."""
+    voice_profiles.remove_rule(profile, index)
+    typer.echo(f"Removed rule [{index}] from '{profile}'")
 
 
 # ----------------------------------------------
