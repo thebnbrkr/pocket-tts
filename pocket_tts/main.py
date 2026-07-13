@@ -46,6 +46,11 @@ cli_app = typer.Typer(
 # Global model instance
 tts_model: TTSModel | None = None
 
+# TTSModel.generate_audio/generate_audio_stream are explicitly not thread-safe
+# (see tts_model.py docstrings). This serializes all model access across
+# concurrent requests rather than letting them corrupt each other.
+_generation_lock = threading.Lock()
+
 web_app = FastAPI(
     title="Kyutai Pocket TTS API", description="Text-to-Speech generation API", version="1.0.0"
 )
@@ -90,7 +95,7 @@ async def get_history(profile: str | None = None, limit: int = 50):
     return history_module.list_history(profile_name=profile, limit=limit)
 
 
-def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_source):
+def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_source, lock):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -106,29 +111,38 @@ def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_sou
         def close(self):
             self.queue.put(None)
 
-    audio_chunks = tts_model.generate_audio_stream(
-        model_state=model_state, text_to_generate=text_to_generate
-    )
-    audio_chunks = history_module.track_and_log(
-        audio_chunks,
-        profile_name=profile_name,
-        voice_source=voice_source,
-        text=text_to_generate,
-        source="server",
-        sample_rate=tts_model.config.mimi.sample_rate,
-    )
-    stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
+    try:
+        audio_chunks = tts_model.generate_audio_stream(
+            model_state=model_state, text_to_generate=text_to_generate
+        )
+        audio_chunks = history_module.track_and_log(
+            audio_chunks,
+            profile_name=profile_name,
+            voice_source=voice_source,
+            text=text_to_generate,
+            source="server",
+            sample_rate=tts_model.config.mimi.sample_rate,
+        )
+        stream_audio_chunks(
+            FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate
+        )
+    finally:
+        lock.release()
 
 
 def generate_data_with_state(
-    text_to_generate: str, model_state: dict, profile_name: str | None, voice_source: str | None
+    text_to_generate: str,
+    model_state: dict,
+    profile_name: str | None,
+    voice_source: str | None,
+    lock,
 ):
     queue = Queue()
 
     # Run your function in a thread
     thread = threading.Thread(
         target=write_to_queue,
-        args=(queue, text_to_generate, model_state, profile_name, voice_source),
+        args=(queue, text_to_generate, model_state, profile_name, voice_source, lock),
     )
     thread.start()
 
@@ -173,48 +187,58 @@ def text_to_speech(
     if not provided:
         voice_url = get_default_voice_for_language(str(tts_model.origin))
 
-    # Use the appropriate model state
-    if voice_profile is not None:
-        try:
-            profile_path = voice_profiles.get_profile_path(voice_profile)
-        except voice_profiles.ProfileNotFoundError as e:
-            raise HTTPException(status_code=404, detail=str(e))
-        text = voice_profiles.apply_rules(voice_profile, text)
-        model_state = tts_model._cached_get_state_for_audio_prompt(str(profile_path))
-        logging.warning("Using voice profile: %s", voice_profile)
-    elif voice_url is not None:
-        if not (
-            voice_url.startswith("http://")
-            or voice_url.startswith("https://")
-            or voice_url.startswith("hf://")
-            or voice_url in _ORIGINS_OF_PREDEFINED_VOICES
-        ):
-            raise HTTPException(
-                status_code=400, detail="voice_url must start with http://, https://, or hf://"
-            )
-        model_state = tts_model._cached_get_state_for_audio_prompt(voice_url)
-        logging.warning("Using voice from URL: %s", voice_url)
-    elif voice_wav is not None:
-        # Use uploaded voice file - preserve extension for format detection
-        suffix = Path(voice_wav.filename).suffix if voice_wav.filename else ".wav"
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
-            content = voice_wav.file.read()
-            temp_file.write(content)
-            temp_file.flush()
-            temp_file_path = temp_file.name
+    # Model access begins here; released either below (on error) or by
+    # write_to_queue once generation finishes (see _generation_lock comment above).
+    _generation_lock.acquire()
+    try:
+        # Use the appropriate model state
+        if voice_profile is not None:
+            try:
+                profile_path = voice_profiles.get_profile_path(voice_profile)
+            except voice_profiles.ProfileNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            text = voice_profiles.apply_rules(voice_profile, text)
+            model_state = tts_model._cached_get_state_for_audio_prompt(str(profile_path))
+            logging.warning("Using voice profile: %s", voice_profile)
+        elif voice_url is not None:
+            if not (
+                voice_url.startswith("http://")
+                or voice_url.startswith("https://")
+                or voice_url.startswith("hf://")
+                or voice_url in _ORIGINS_OF_PREDEFINED_VOICES
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="voice_url must start with http://, https://, or hf://",
+                )
+            model_state = tts_model._cached_get_state_for_audio_prompt(voice_url)
+            logging.warning("Using voice from URL: %s", voice_url)
+        elif voice_wav is not None:
+            # Use uploaded voice file - preserve extension for format detection
+            suffix = Path(voice_wav.filename).suffix if voice_wav.filename else ".wav"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+                content = voice_wav.file.read()
+                temp_file.write(content)
+                temp_file.flush()
+                temp_file_path = temp_file.name
 
-        # Close the file before reading it back (required on Windows)
-        try:
-            model_state = tts_model.get_state_for_audio_prompt(Path(temp_file_path), truncate=True)
-        finally:
-            os.unlink(temp_file_path)
-    else:
-        raise HTTPException(status_code=500, detail="This should never happen.")
+            # Close the file before reading it back (required on Windows)
+            try:
+                model_state = tts_model.get_state_for_audio_prompt(
+                    Path(temp_file_path), truncate=True
+                )
+            finally:
+                os.unlink(temp_file_path)
+        else:
+            raise HTTPException(status_code=500, detail="This should never happen.")
+    except Exception:
+        _generation_lock.release()
+        raise
 
     voice_source = voice_profile or voice_url or "upload"
 
     return StreamingResponse(
-        generate_data_with_state(text, model_state, voice_profile, voice_source),
+        generate_data_with_state(text, model_state, voice_profile, voice_source, _generation_lock),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
