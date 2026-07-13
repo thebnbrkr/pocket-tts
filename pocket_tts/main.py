@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import sys
@@ -522,6 +523,38 @@ def remove_rule_command(
     """Remove a rule from a voice profile by its index."""
     voice_profiles.remove_rule(profile, index)
     typer.echo(f"Removed rule [{index}] from '{profile}'")
+
+
+@cli_app.command("import-rules")
+def import_rules(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+    rules_file: Annotated[
+        str, typer.Argument(help="Path to a JSON file: a list of {pattern, replacement, regex?}")
+    ],
+):
+    """Bulk-add rules to a profile from a JSON file."""
+    rules = json.loads(Path(rules_file).read_text())
+    count = voice_profiles.add_rules(profile, rules)
+    typer.echo(f"Added {count} rule(s) to '{profile}'")
+
+
+@cli_app.command("remove-rules")
+def remove_rules_command(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+    indices: Annotated[list[int], typer.Argument(help="Rule indices, see list-rules")],
+):
+    """Remove multiple rules from a profile by index."""
+    voice_profiles.remove_rules(profile, indices)
+    typer.echo(f"Removed {len(indices)} rule(s) from '{profile}'")
+
+
+@cli_app.command("clear-rules")
+def clear_rules_command(
+    profile: Annotated[str, typer.Argument(help="Name of the voice profile")],
+):
+    """Remove all rules from a profile."""
+    voice_profiles.clear_rules(profile)
+    typer.echo(f"Cleared all rules from '{profile}'")
 
 
 # ----------------------------------------------

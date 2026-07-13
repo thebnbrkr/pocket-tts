@@ -90,6 +90,39 @@ def remove_rule(name: str, index: int) -> None:
     _save_metadata(name, metadata)
 
 
+def add_rules(name: str, rules: list[dict]) -> int:
+    for i, rule in enumerate(rules):
+        if "pattern" not in rule or "replacement" not in rule:
+            raise ValueError(f"Rule at index {i} is missing 'pattern' or 'replacement': {rule}")
+
+    metadata = _load_metadata(name)
+    existing = metadata.setdefault("rules", [])
+    for rule in rules:
+        existing.append(
+            {
+                "pattern": rule["pattern"],
+                "replacement": rule["replacement"],
+                "regex": rule.get("regex", False),
+            }
+        )
+    _save_metadata(name, metadata)
+    return len(rules)
+
+
+def remove_rules(name: str, indices: list[int]) -> None:
+    metadata = _load_metadata(name)
+    rules = metadata.setdefault("rules", [])
+    for index in sorted(set(indices), reverse=True):
+        rules.pop(index)
+    _save_metadata(name, metadata)
+
+
+def clear_rules(name: str) -> None:
+    metadata = _load_metadata(name)
+    metadata["rules"] = []
+    _save_metadata(name, metadata)
+
+
 def list_rules(name: str) -> list[dict]:
     return _load_metadata(name).get("rules", [])
 
