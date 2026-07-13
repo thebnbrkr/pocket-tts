@@ -104,6 +104,10 @@ You can check out the [serve documentation](https://kyutai-labs.github.io/pocket
 
 Processing an audio file (e.g., a .wav or .mp3) for voice cloning is relatively slow, but loading a safetensors file -- a voice embedding converted from an audio file -- is very fast. You can use the `export-voice` command to do this conversion. See the [export-voice documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/export_voice/) for more details and examples.
 
+### Voice profiles
+
+Instead of re-pointing at an audio file or a raw safetensors path every time, you can clone a voice once and give it a name with `create-profile`, then reuse that name from the CLI, the server, the web UI, or Python. See the [voice profiles documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/voice_profiles/) for details.
+
 
 ## Using it as a Python library
 
