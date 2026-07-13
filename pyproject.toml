@@ -26,6 +26,7 @@ dependencies = [
 [project.optional-dependencies]
 audio = ["soundfile>=0.12.0"]
 quantize = ["torchao>=0.16.0"]
+asr = ["faster-whisper>=1.0.0"]
 
 
 [dependency-groups]

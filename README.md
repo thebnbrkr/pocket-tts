@@ -112,6 +112,10 @@ Instead of re-pointing at an audio file or a raw safetensors path every time, yo
 
 Every generation (CLI or server) is automatically logged to a local SQLite database -- timestamp, voice/profile used, full text, and timing -- viewable with `pocket-tts history` or the `/history` endpoint. See the [generation history documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/history/) for details.
 
+### Diagnostics dashboard and pronunciation checking
+
+The web UI shows a live history panel so you can see everything that's been generated without leaving the browser. Optionally (`pip install 'pocket-tts[asr]'` + `pocket-tts serve --enable-pronunciation-check`), every generation gets transcribed back and compared to the requested text in the background, flagging mismatches (e.g. mispronounced slang or chemical formulas) without adding any latency to the response. See the [pronunciation check documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/pronunciation_check/) for details.
+
 
 ## Using it as a Python library
 

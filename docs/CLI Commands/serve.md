@@ -55,6 +55,20 @@ pocket-tts serve --config "C://pocket-tts/my_config.yaml"
 
 Once the server is running, navigate to `http://localhost:8000` to access the web interface.
 
+### Diagnostics: the History panel
+
+Below the generate form, the web UI shows a live table of everything generated so far
+(fed entirely by the existing [`/history`](history.md) endpoint — no separate
+tracking, it's the same data the CLI's `pocket-tts history` shows). Each row shows
+when it ran, whether it came from the CLI or the server, which voice/profile was
+used, a snippet of the text (hover for the full text), and the audio duration.
+It refreshes automatically after every generation, and has a manual "Refresh"
+button. If [pronunciation checking](pronunciation_check.md) is enabled, rows where
+the generated audio didn't match the requested text get a red "⚠ mismatch" badge,
+with the actual transcript shown on hover — this can appear a moment *after* the
+row first shows up, since that check runs in the background (see below), not
+before the response is sent.
+
 ## Concurrency
 
 `TTSModel` is not thread-safe (see the [Python API docs](python-api.md)), and the

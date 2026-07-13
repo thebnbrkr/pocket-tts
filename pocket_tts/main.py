@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from queue import Queue
 
+import torch
 import typer
 import uvicorn
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -27,6 +28,7 @@ from pocket_tts.default_parameters import (
     get_default_voice_for_language,
 )
 from pocket_tts import history as history_module
+from pocket_tts import pronunciation_check
 from pocket_tts import voice_profiles
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
@@ -50,6 +52,9 @@ tts_model: TTSModel | None = None
 # (see tts_model.py docstrings). This serializes all model access across
 # concurrent requests rather than letting them corrupt each other.
 _generation_lock = threading.Lock()
+
+# Set once at server startup via `serve --enable-pronunciation-check`.
+_pronunciation_check_enabled = False
 
 web_app = FastAPI(
     title="Kyutai Pocket TTS API", description="Text-to-Speech generation API", version="1.0.0"
@@ -95,6 +100,14 @@ async def get_history(profile: str | None = None, limit: int = 50):
     return history_module.list_history(profile_name=profile, limit=limit)
 
 
+def _collect_chunks(chunks, collected: list):
+    """Passthrough generator: yields chunks unchanged, also appending each one
+    to `collected` so the full audio is available after streaming finishes."""
+    for chunk in chunks:
+        collected.append(chunk)
+        yield chunk
+
+
 def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_source, lock):
     """Allows writing to the StreamingResponse as if it were a file."""
 
@@ -112,6 +125,10 @@ def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_sou
             self.queue.put(None)
 
     try:
+        sample_rate = tts_model.config.mimi.sample_rate
+        row_id_out: list = []
+        collected_chunks: list | None = [] if _pronunciation_check_enabled else None
+
         audio_chunks = tts_model.generate_audio_stream(
             model_state=model_state, text_to_generate=text_to_generate
         )
@@ -121,11 +138,23 @@ def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_sou
             voice_source=voice_source,
             text=text_to_generate,
             source="server",
-            sample_rate=tts_model.config.mimi.sample_rate,
+            sample_rate=sample_rate,
+            row_id_out=row_id_out,
         )
-        stream_audio_chunks(
-            FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate
-        )
+        if collected_chunks is not None:
+            audio_chunks = _collect_chunks(audio_chunks, collected_chunks)
+
+        stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, sample_rate)
+
+        # Only after the response has fully streamed back: run the (slower)
+        # pronunciation check in the background, never blocking the request.
+        if collected_chunks:
+            full_audio = torch.cat(collected_chunks, dim=0)
+            threading.Thread(
+                target=pronunciation_check.check_pronunciation,
+                args=(full_audio, sample_rate, text_to_generate, row_id_out[0]),
+                daemon=True,
+            ).start()
     finally:
         lock.release()
 
@@ -271,11 +300,23 @@ def serve(
     quantize: Annotated[
         bool, typer.Option(help="Apply int8 quantization to reduce memory usage")
     ] = False,
+    enable_pronunciation_check: Annotated[
+        bool,
+        typer.Option(
+            help="Transcribe generated audio in the background and flag mismatches "
+            "with the requested text in /history. Requires `pip install 'pocket-tts[asr]'`. "
+            "Runs after the response has already streamed back, so it never adds latency."
+        ),
+    ] = False,
 ):
     """Start the FastAPI server."""
 
-    global tts_model
+    global tts_model, _pronunciation_check_enabled
     tts_model = TTSModel.load_model(language=language, config=config, quantize=quantize)
+
+    _pronunciation_check_enabled = enable_pronunciation_check
+    if enable_pronunciation_check:
+        pronunciation_check.preload_model()
 
     uvicorn.run("pocket_tts.main:web_app", host=host, port=port, reload=reload)
 

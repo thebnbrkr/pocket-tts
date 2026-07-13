@@ -118,6 +118,29 @@
                 </div>
             </div>
         </div>
+
+        <div class="bg-white p-4 rounded-lg shadow">
+            <div class="flex items-center justify-between mb-2">
+                <h3 class="text-lg font-semibold">History</h3>
+                <button id="history-refresh-btn" class="text-xs text-blue-600 hover:underline">Refresh</button>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="w-full text-xs text-left">
+                    <thead>
+                        <tr class="text-gray-500 border-b">
+                            <th class="py-1 pr-2">Time</th>
+                            <th class="py-1 pr-2">Source</th>
+                            <th class="py-1 pr-2">Voice</th>
+                            <th class="py-1 pr-2">Text</th>
+                            <th class="py-1 pr-2">Duration</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table-body">
+                        <tr><td colspan="5" class="py-2 text-gray-400">No history yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -263,9 +286,56 @@
         const downloadLink = document.getElementById('download-link');
 
         const voiceProfileSelect = document.getElementById('voice-profile-select');
+        const historyTableBody = document.getElementById('history-table-body');
+        const historyRefreshBtn = document.getElementById('history-refresh-btn');
 
         // Event listeners
         generateBtn.addEventListener('click', generateAudio);
+        historyRefreshBtn.addEventListener('click', loadHistory);
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function loadHistory() {
+            try {
+                const historyEndpoint = `${window.location.pathname.replace(/\/+$/, '')}/history`;
+                const response = await fetch(historyEndpoint);
+                if (!response.ok) return;
+                const rows = await response.json();
+
+                if (!rows.length) {
+                    historyTableBody.innerHTML = '<tr><td colspan="5" class="py-2 text-gray-400">No history yet.</td></tr>';
+                    return;
+                }
+
+                historyTableBody.innerHTML = rows.map(row => {
+                    const time = new Date(row.created_at).toLocaleTimeString();
+                    const duration = row.audio_duration_ms != null ? `${(row.audio_duration_ms / 1000).toFixed(1)}s` : '-';
+                    const textSnippet = row.text.length > 60 ? row.text.slice(0, 60) + '...' : row.text;
+
+                    let textCell = `<span title="${escapeHtml(row.text)}">${escapeHtml(textSnippet)}</span>`;
+                    // pronunciation_match is a SQLite INTEGER (0/1/NULL), which
+                    // serializes to JSON as 0/1/null -- not JS booleans.
+                    if (row.pronunciation_match === 0) {
+                        const transcribed = row.transcribed_text || '(no transcript)';
+                        textCell += ` <span class="text-red-600" title="Heard: ${escapeHtml(transcribed)}">&#9888; mismatch</span>`;
+                    }
+
+                    return `<tr class="border-b last:border-0">
+                        <td class="py-1 pr-2 whitespace-nowrap">${time}</td>
+                        <td class="py-1 pr-2">${escapeHtml(row.source)}</td>
+                        <td class="py-1 pr-2">${escapeHtml(row.voice_source || '-')}</td>
+                        <td class="py-1 pr-2">${textCell}</td>
+                        <td class="py-1 pr-2 whitespace-nowrap">${duration}</td>
+                    </tr>`;
+                }).join('');
+            } catch (e) {
+                console.error('Error loading history:', e);
+            }
+        }
 
         async function loadVoiceProfiles() {
             try {
@@ -407,8 +477,9 @@
                 });
                 downloadLink.href = audioUrl;
                 downloadLink.download = `tts-audio.wav`;
-                
+
                 audioSection.classList.remove('hidden');
+                loadHistory();
 
             } catch (error) {
                 console.error('Error generating audio:', error);
@@ -425,6 +496,7 @@
         window.addEventListener('load', () => {
             textInput.focus();
             loadVoiceProfiles();
+            loadHistory();
         });
     </script>
 </body>

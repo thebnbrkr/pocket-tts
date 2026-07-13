@@ -7,6 +7,20 @@ from pocket_tts.utils.utils import make_cache_directory
 HISTORY_DB_PATH = make_cache_directory() / "history.db"
 
 
+def _ensure_schema(conn: sqlite3.Connection) -> None:
+    """Add columns introduced after the table already existed on disk.
+
+    CREATE TABLE IF NOT EXISTS is a no-op against a database that already has
+    the `generations` table (e.g. this repo's own real history.db) -- new
+    columns must be migrated in explicitly, or they'd silently never appear
+    on any pre-existing database.
+    """
+    existing_columns = {row[1] for row in conn.execute("PRAGMA table_info(generations)")}
+    for column, column_type in [("transcribed_text", "TEXT"), ("pronunciation_match", "INTEGER")]:
+        if column not in existing_columns:
+            conn.execute(f"ALTER TABLE generations ADD COLUMN {column} {column_type}")
+
+
 def _get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(HISTORY_DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -24,6 +38,7 @@ def _get_connection() -> sqlite3.Connection:
         )
         """
     )
+    _ensure_schema(conn)
     return conn
 
 
@@ -75,6 +90,14 @@ def clear_history() -> None:
         conn.execute("DELETE FROM generations")
 
 
+def update_transcription(row_id: int, transcribed_text: str, matched: bool) -> None:
+    with _get_connection() as conn:
+        conn.execute(
+            "UPDATE generations SET transcribed_text = ?, pronunciation_match = ? WHERE id = ?",
+            (transcribed_text, int(matched), row_id),
+        )
+
+
 def track_and_log(
     audio_chunks,
     *,
@@ -83,8 +106,15 @@ def track_and_log(
     text: str,
     source: str,
     sample_rate: int,
+    row_id_out: list | None = None,
 ):
-    """Passthrough generator: yields chunks unchanged, logs once the stream ends."""
+    """Passthrough generator: yields chunks unchanged, logs once the stream ends.
+
+    Generators consumed via a plain for-loop (as stream_audio_chunks does)
+    can't return a value the normal way, so the logged row's id is instead
+    written into `row_id_out` (if given) once the finally block runs -- the
+    caller reads it after fully draining this generator.
+    """
     total_samples = 0
     start_time = time.monotonic()
     try:
@@ -94,7 +124,7 @@ def track_and_log(
     finally:
         duration_ms = int((time.monotonic() - start_time) * 1000)
         audio_duration_ms = int(total_samples * 1000 / sample_rate)
-        log_generation(
+        row_id = log_generation(
             profile_name=profile_name,
             voice_source=voice_source,
             text=text,
@@ -102,3 +132,5 @@ def track_and_log(
             audio_duration_ms=audio_duration_ms,
             source=source,
         )
+        if row_id_out is not None:
+            row_id_out.append(row_id)
