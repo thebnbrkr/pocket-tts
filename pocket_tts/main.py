@@ -25,6 +25,7 @@ from pocket_tts.default_parameters import (
     get_default_text_for_language,
     get_default_voice_for_language,
 )
+from pocket_tts import voice_profiles
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
 from pocket_tts.utils.utils import _ORIGINS_OF_PREDEFINED_VOICES
@@ -77,6 +78,11 @@ async def health():
     return {"status": "healthy"}
 
 
+@web_app.get("/profiles")
+async def list_voice_profiles():
+    return voice_profiles.list_profiles()
+
+
 def write_to_queue(queue, text_to_generate, model_state):
     """Allows writing to the StreamingResponse as if it were a file."""
 
@@ -123,6 +129,7 @@ def text_to_speech(
     text: str = Form(...),
     voice_url: str | None = Form(None),
     voice_wav: UploadFile | None = File(None),
+    voice_profile: str | None = Form(None),
 ):
     """
     Generate speech from text using the pre-loaded voice prompt or a custom voice.
@@ -130,19 +137,31 @@ def text_to_speech(
     Args:
         text: Text to convert to speech
         voice_url: Optional built-in voice name (e.g., "alba"), or voice URL (http://, https://, or hf://)
-        voice_wav: Optional uploaded voice file (mutually exclusive with voice_url)
+        voice_wav: Optional uploaded voice file (takes precedence over voice_url/voice_profile)
+        voice_profile: Optional name of a saved voice profile (see `pocket-tts create-profile`)
     """
     if not text.strip():
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
-    if voice_url is None and voice_wav is None:
+    provided = [v for v in (voice_url, voice_wav, voice_profile) if v is not None]
+    if len(provided) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide only one of voice_url, voice_wav, or voice_profile",
+        )
+
+    if not provided:
         voice_url = get_default_voice_for_language(str(tts_model.origin))
 
-    if voice_url is not None and voice_wav is not None:
-        raise HTTPException(status_code=400, detail="Cannot provide both voice_url and voice_wav")
-
     # Use the appropriate model state
-    if voice_url is not None:
+    if voice_profile is not None:
+        try:
+            profile_path = voice_profiles.get_profile_path(voice_profile)
+        except voice_profiles.ProfileNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        model_state = tts_model._cached_get_state_for_audio_prompt(str(profile_path))
+        logging.warning("Using voice profile: %s", voice_profile)
+    elif voice_url is not None:
         if not (
             voice_url.startswith("http://")
             or voice_url.startswith("https://")
@@ -370,6 +389,67 @@ def export_voice(
             audio_conditioning=audio_path, truncate=True
         )
         export_model_state(model_state, export_path)
+
+
+# ----------------------------------------------
+# voice profiles CLI implementation
+# ----------------------------------------------
+
+
+@cli_app.command("create-profile")
+def create_profile(
+    audio_path: Annotated[str, typer.Argument(help="Audio file to build the profile from")],
+    name: Annotated[str, typer.Argument(help="Name for the profile (letters, digits, _, -)")],
+    quiet: Annotated[bool, typer.Option("-q", "--quiet", help="Disable logging output")] = False,
+    language: Annotated[
+        str | None,
+        typer.Option(
+            help="Language for the TTS model used to encode the voice.", show_default=False
+        ),
+    ] = None,
+    config: Annotated[
+        str | None,
+        typer.Option(
+            help="Path to locally-saved model config .yaml file. "
+            "Incompatible with the language argument."
+        ),
+    ] = None,
+    tags: Annotated[
+        str | None, typer.Option(help="Comma-separated tags, e.g. 'medical,calm'")
+    ] = None,
+    notes: Annotated[str | None, typer.Option(help="Free-form notes about this voice")] = None,
+    overwrite: Annotated[
+        bool, typer.Option(help="Replace an existing profile with the same name")
+    ] = False,
+):
+    """Create a reusable, named voice profile from an audio file."""
+    log_level = logging.ERROR if quiet else logging.INFO
+    with enable_logging("pocket_tts", log_level):
+        tts_model = TTSModel.load_model(language=language, config=config)
+        model_state = tts_model.get_state_for_audio_prompt(audio_path, truncate=True)
+        path = voice_profiles.save_profile(
+            name,
+            model_state,
+            source=audio_path,
+            language=language,
+            tags=[t.strip() for t in tags.split(",")] if tags else [],
+            notes=notes or "",
+            overwrite=overwrite,
+        )
+        logger.info("Saved profile '%s' to %s", name, path)
+
+
+@cli_app.command("list-profiles")
+def list_profiles_command():
+    """List saved voice profiles."""
+    profiles = voice_profiles.list_profiles()
+    if not profiles:
+        typer.echo("No voice profiles saved yet. Create one with `pocket-tts create-profile`.")
+        return
+    for p in profiles:
+        typer.echo(
+            f"{p['name']:20s} lang={p.get('language') or '-':10s} tags={','.join(p['tags'])}"
+        )
 
 
 if __name__ == "__main__":

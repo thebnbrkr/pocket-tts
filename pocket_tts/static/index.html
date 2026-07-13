@@ -32,6 +32,15 @@
         </div>
 
         <div class="bg-white p-4 rounded-lg shadow">
+            <label for="voice-profile-select" class="block text-sm font-medium text-gray-700 mb-2">
+                Saved voice profile (leave as "None" to use a URL or upload below):
+            </label>
+            <select id="voice-profile-select" class="w-full border rounded p-2">
+                <option value="">None</option>
+            </select>
+        </div>
+
+        <div class="bg-white p-4 rounded-lg shadow">
             <label for="voice-url-input" class="block text-sm font-medium text-gray-700 mb-2">
                 Optional voice URL (leave empty to use default voice):
             </label>
@@ -253,8 +262,29 @@
         const audio = document.getElementById('audio');
         const downloadLink = document.getElementById('download-link');
 
+        const voiceProfileSelect = document.getElementById('voice-profile-select');
+
         // Event listeners
         generateBtn.addEventListener('click', generateAudio);
+
+        async function loadVoiceProfiles() {
+            try {
+                const profilesEndpoint = `${window.location.pathname.replace(/\/+$/, '')}/profiles`;
+                const response = await fetch(profilesEndpoint);
+                if (!response.ok) return;
+                const profiles = await response.json();
+                for (const profile of profiles) {
+                    const option = document.createElement('option');
+                    option.value = profile.name;
+                    option.textContent = profile.tags && profile.tags.length
+                        ? `${profile.name} (${profile.tags.join(', ')})`
+                        : profile.name;
+                    voiceProfileSelect.appendChild(option);
+                }
+            } catch (e) {
+                console.error('Error loading voice profiles:', e);
+            }
+        }
 
         function showStatus(message, isLoading = false) {
             statusText.textContent = message;
@@ -304,15 +334,16 @@
                 const formData = new FormData();
                 formData.append('text', text);
 
-                // Add voice URL if provided (only if no WAV file is uploaded)
+                // Priority: uploaded WAV > saved voice profile > voice URL
                 const voiceUrl = document.getElementById('voice-url-input').value.trim();
                 const voiceWavFile = document.getElementById('voice-wav-input').files[0];
+                const voiceProfile = voiceProfileSelect.value;
 
                 if (voiceWavFile) {
-                    // If WAV file is uploaded, only use the WAV file (ignore voice URL)
                     formData.append('voice_wav', voiceWavFile);
+                } else if (voiceProfile) {
+                    formData.append('voice_profile', voiceProfile);
                 } else if (voiceUrl) {
-                    // Only use voice URL if no WAV file is uploaded
                     formData.append('voice_url', voiceUrl);
                 }
 
@@ -393,6 +424,7 @@
         // Focus on text input when page loads
         window.addEventListener('load', () => {
             textInput.focus();
+            loadVoiceProfiles();
         });
     </script>
 </body>
