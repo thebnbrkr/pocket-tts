@@ -147,8 +147,43 @@ uv run pocket-tts list-rules chemist
 uv run pocket-tts remove-rule chemist 0
 ```
 
-Removes by index (shown in `list-rules`). There's no bulk-add/import command yet —
-each rule is added one at a time via `add-rule`.
+Removes by index (shown in `list-rules`).
+
+### Bulk add rules from a file
+
+For a profile with real domain vocabulary, adding terms one at a time is tedious —
+`import-rules` reads a JSON file (a plain list of `{pattern, replacement, regex?}`
+objects, `regex` optional, defaults to `false`) and adds them all in one call:
+
+```json
+[
+  {"pattern": "NaCl", "replacement": "sodium chloride"},
+  {"pattern": "H2O", "replacement": "water"},
+  {"pattern": "(\\d+)mg", "replacement": "\\1 milligrams", "regex": true}
+]
+```
+
+```bash
+uv run pocket-tts import-rules chemist rules.json
+```
+
+Validation happens up front, for the whole file, before anything is saved — if any
+entry is missing `pattern`/`replacement`, the whole import fails with an error naming
+the bad entry, rather than silently importing part of the file.
+
+### Bulk remove rules
+
+Remove several rules by index in one call:
+
+```bash
+uv run pocket-tts remove-rules chemist 0 2 4
+```
+
+Or wipe every rule on a profile in one step:
+
+```bash
+uv run pocket-tts clear-rules chemist
+```
 
 ### How matching works
 
@@ -162,8 +197,11 @@ already produced. Fine for the handful-to-dozens-of-rules scale this is meant fo
 from pocket_tts import voice_profiles
 
 voice_profiles.add_rule("chemist", "NaCl", "sodium chloride")
+voice_profiles.add_rules("chemist", [{"pattern": "H2O", "replacement": "water"}])
 voice_profiles.list_rules("chemist")
 voice_profiles.remove_rule("chemist", 0)
+voice_profiles.remove_rules("chemist", [0, 2])
+voice_profiles.clear_rules("chemist")
 
 # apply_rules() is what /tts calls internally before generation
 text = voice_profiles.apply_rules("chemist", "The formula is NaCl.")
