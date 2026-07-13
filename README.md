@@ -108,6 +108,10 @@ Processing an audio file (e.g., a .wav or .mp3) for voice cloning is relatively 
 
 Instead of re-pointing at an audio file or a raw safetensors path every time, you can clone a voice once and give it a name with `create-profile`, then reuse that name from the CLI, the server, the web UI, or Python. See the [voice profiles documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/voice_profiles/) for details.
 
+### Generation history
+
+Every generation (CLI or server) is automatically logged to a local SQLite database -- timestamp, voice/profile used, full text, and timing -- viewable with `pocket-tts history` or the `/history` endpoint. See the [generation history documentation](https://kyutai-labs.github.io/pocket-tts/CLI%20Commands/history/) for details.
+
 
 ## Using it as a Python library
 
