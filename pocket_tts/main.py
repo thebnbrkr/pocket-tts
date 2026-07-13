@@ -25,6 +25,7 @@ from pocket_tts.default_parameters import (
     get_default_text_for_language,
     get_default_voice_for_language,
 )
+from pocket_tts import history as history_module
 from pocket_tts import voice_profiles
 from pocket_tts.models.tts_model import TTSModel, export_model_state
 from pocket_tts.utils.logging_utils import enable_logging
@@ -83,7 +84,12 @@ async def list_voice_profiles():
     return voice_profiles.list_profiles()
 
 
-def write_to_queue(queue, text_to_generate, model_state):
+@web_app.get("/history")
+async def get_history(profile: str | None = None, limit: int = 50):
+    return history_module.list_history(profile_name=profile, limit=limit)
+
+
+def write_to_queue(queue, text_to_generate, model_state, profile_name, voice_source):
     """Allows writing to the StreamingResponse as if it were a file."""
 
     class FileLikeToQueue(io.IOBase):
@@ -102,14 +108,27 @@ def write_to_queue(queue, text_to_generate, model_state):
     audio_chunks = tts_model.generate_audio_stream(
         model_state=model_state, text_to_generate=text_to_generate
     )
+    audio_chunks = history_module.track_and_log(
+        audio_chunks,
+        profile_name=profile_name,
+        voice_source=voice_source,
+        text=text_to_generate,
+        source="server",
+        sample_rate=tts_model.config.mimi.sample_rate,
+    )
     stream_audio_chunks(FileLikeToQueue(queue), audio_chunks, tts_model.config.mimi.sample_rate)
 
 
-def generate_data_with_state(text_to_generate: str, model_state: dict):
+def generate_data_with_state(
+    text_to_generate: str, model_state: dict, profile_name: str | None, voice_source: str | None
+):
     queue = Queue()
 
     # Run your function in a thread
-    thread = threading.Thread(target=write_to_queue, args=(queue, text_to_generate, model_state))
+    thread = threading.Thread(
+        target=write_to_queue,
+        args=(queue, text_to_generate, model_state, profile_name, voice_source),
+    )
     thread.start()
 
     # Yield data as it becomes available
@@ -190,8 +209,10 @@ def text_to_speech(
     else:
         raise HTTPException(status_code=500, detail="This should never happen.")
 
+    voice_source = voice_profile or voice_url or "upload"
+
     return StreamingResponse(
-        generate_data_with_state(text, model_state),
+        generate_data_with_state(text, model_state, voice_profile, voice_source),
         media_type="audio/wav",
         headers={
             "Content-Disposition": "attachment; filename=generated_speech.wav",
@@ -331,6 +352,14 @@ def generate(
             frames_after_eos=frames_after_eos,
             max_tokens=max_tokens,
         )
+        audio_chunks = history_module.track_and_log(
+            audio_chunks,
+            profile_name=None,
+            voice_source=str(voice),
+            text=text,
+            source="cli",
+            sample_rate=tts_model.config.mimi.sample_rate,
+        )
 
         stream_audio_chunks(output_path, audio_chunks, tts_model.config.mimi.sample_rate)
 
@@ -449,6 +478,28 @@ def list_profiles_command():
     for p in profiles:
         typer.echo(
             f"{p['name']:20s} lang={p.get('language') or '-':10s} tags={','.join(p['tags'])}"
+        )
+
+
+# ----------------------------------------------
+# generation history CLI implementation
+# ----------------------------------------------
+
+
+@cli_app.command()
+def history(
+    profile: Annotated[str | None, typer.Option(help="Filter by profile name")] = None,
+    limit: Annotated[int, typer.Option(help="Max rows to show")] = 20,
+):
+    """Show recent generation history."""
+    rows = history_module.list_history(profile_name=profile, limit=limit)
+    if not rows:
+        typer.echo("No generation history yet.")
+        return
+    for row in rows:
+        snippet = row["text"][:60] + ("..." if len(row["text"]) > 60 else "")
+        typer.echo(
+            f"{row['created_at']}  {row['source']:6s}  voice={row['voice_source'] or '-':20s}  \"{snippet}\""
         )
 
 
