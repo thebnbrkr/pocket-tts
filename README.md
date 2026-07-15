@@ -30,6 +30,17 @@ Supports Python 3.10, 3.11, 3.12, 3.13 and 3.14. Requires PyTorch 2.5+. Does not
 
 Additional languages may be added in the future.
 
+## What's different in this fork
+
+This is a fork of [kyutai-labs/pocket-tts](https://github.com/kyutai-labs/pocket-tts) that adds a layer for managing reusable voices and keeping track of what's been generated, on top of upstream's `generate` / `serve` / `export-voice` commands:
+
+* **Named voice profiles** — clone a voice once with `create-profile` and reuse it by name from the CLI, the server, the web UI, or Python, instead of re-pointing at an audio file or a raw safetensors path every time. See [Voice profiles](#voice-profiles).
+* **Per-profile pronunciation/text rules** — attach programmable find-and-replace rules (plain text or regex) to a profile, e.g. to fix mispronounced acronyms or chemical formulas, with full CRUD and bulk add/remove support.
+* **Generation history** — every generation (CLI or server) is automatically logged to a local SQLite database (timestamp, voice/profile used, full text, timing), viewable with `pocket-tts history` or the `/history` endpoint.
+* **Diagnostics dashboard and pronunciation checking** — the web UI shows a live history panel, and optionally (`pip install 'pocket-tts[asr]'`) every generation gets transcribed back and compared to the requested text in the background to flag mismatches, without adding latency.
+* **Server concurrency fixes** — server-side model access is now serialized with a generation lock to avoid race conditions under concurrent requests.
+* **Automated test coverage** for voice profiles, history, and the server.
+
 ## Trying it from the website, without installing anything
 
 Navigate to the [Kyutai website](https://kyutai.org/pocket-tts) to try it out directly in your browser. You can input text, select different voices, and generate speech without any installation.
